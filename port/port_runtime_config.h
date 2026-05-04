@@ -25,6 +25,7 @@ typedef enum {
 void Port_Config_Load(const char* path);
 u8 Port_Config_WindowScale(void);
 const char* Port_Config_UpscaleMethod(void);
+const char* Port_Config_VideoBackend(void);
 u64 Port_Config_FrameTimeNs(void);
 u32 Port_Config_TargetFps(void);
 bool Port_Config_PortSettingsMenuEnabled(void);

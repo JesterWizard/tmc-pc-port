@@ -114,6 +114,12 @@ static bool Port_TryInitAudioDriver(const char* audioDriver, bool muteOnSuccess,
     return true;
 }
 
+static bool Port_AudioErrorMeansNoDevice(const char* err) {
+    return err != NULL &&
+           (strcmp(err, "No available audio device") == 0 ||
+            strstr(err, "No available audio device") != NULL);
+}
+
 static bool Port_InitVideo(void) {
     const char* err = NULL;
     const char* forcedDriver = getenv("SDL_VIDEODRIVER");
@@ -182,6 +188,13 @@ static void Port_InitAudio(void) {
     }
 
     fprintf(stderr, "SDL default audio init failed: %s\n", err ? err : "unknown error");
+
+    if (Port_AudioErrorMeansNoDevice(err)) {
+        if (Port_TryInitAudioDriver("dummy", true, &err)) {
+            fprintf(stderr, "Audio device unavailable, using SDL dummy audio driver.\n");
+            return;
+        }
+    }
 
     for (size_t i = 0; i < sizeof(kPreferredDrivers) / sizeof(kPreferredDrivers[0]); i++) {
         const char* driver = kPreferredDrivers[i];
@@ -288,7 +301,17 @@ int main(int argc, char* argv[]) {
     Port_Config_OpenGamepads();
 
     SDL_Window* window = SDL_CreateWindow(
-        "The Minish Cap", 240 * window_scale, 160 * window_scale, SDL_WINDOW_RESIZABLE);
+        "The Minish Cap", 240 * window_scale, 160 * window_scale,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
+    if (window == NULL) {
+        fprintf(stderr,
+                "SDL_CreateWindow OpenGL path failed: %s\n"
+                "Falling back to a non-OpenGL window.\n",
+                SDL_GetError());
+        window = SDL_CreateWindow(
+            "The Minish Cap", 240 * window_scale, 160 * window_scale,
+            SDL_WINDOW_RESIZABLE);
+    }
     if (window == NULL) {
         fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
         SDL_Quit();

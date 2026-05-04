@@ -38,6 +38,7 @@ const std::array<Def, PORT_INPUT_COUNT> kDefaults = {{
 
 u8 sScale = 3;
 std::string sUpscaleMethod = "nearest";
+std::string sVideoBackend = "auto";
 u64 sFrameTimeNs = 16666667;
 bool sPortSettingsMenuEnabled = true;
 std::array<std::vector<Bind>, PORT_INPUT_COUNT> sBinds;
@@ -50,6 +51,7 @@ nlohmann::json DefaultsJson(void) {
     nlohmann::json j = {
         { "window_scale", 3 },
         { "upscale_method", "nearest" },
+        { "video_backend", "auto" },
         { "frame_time_ns", 16666667 },
         { "port_settings_menu", true },
         { "bindings", nlohmann::json::object() },
@@ -153,6 +155,7 @@ extern "C" void Port_Config_Load(const char* path) {
     int scale = j.value("window_scale", 3);
     sScale = scale >= 1 && scale <= 10 ? (u8)scale : 3;
     sUpscaleMethod = j.value("upscale_method", "nearest");
+    sVideoBackend = j.value("video_backend", "auto");
     sFrameTimeNs = j.value("frame_time_ns", 16666667ULL);
     sPortSettingsMenuEnabled = j.value("port_settings_menu", true);
     if (sFrameTimeNs < 1000000) {
@@ -175,6 +178,10 @@ extern "C" u8 Port_Config_WindowScale(void) {
 
 extern "C" const char* Port_Config_UpscaleMethod(void) {
     return sUpscaleMethod.c_str();
+}
+
+extern "C" const char* Port_Config_VideoBackend(void) {
+    return sVideoBackend.c_str();
 }
 
 extern "C" u64 Port_Config_FrameTimeNs(void) {
