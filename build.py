@@ -313,7 +313,7 @@ def build_version(version: str, env: dict, non_interactive: bool = False) -> Opt
 
     assets_dir = REPO_ROOT / "build" / "pc" / "assets"
     assets_src_dir = REPO_ROOT / "build" / "pc" / "assets_src"
-    assets_ready = True  # Force skip asset processing to avoid re-extraction
+    assets_ready = assets_dir.exists() and assets_src_dir.exists()
 
     steps = [
         (f"Configure ({version})", configure_cmd),
