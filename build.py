@@ -316,7 +316,7 @@ def build_version(version: str, env: dict, non_interactive: bool = False) -> Opt
         steps.extend([
             ("Extract assets",              ["xmake", "extract_assets"]),
             ("Convert assets",              ["xmake", "convert_assets"]),
-            ("Build assets",                ["xmake", "build_assets"]),
+            # ("Build assets",                ["xmake", "build_assets"]),
         ])
 
     steps.append((f"Compile tmc_pc ({version})", ["xmake", "build", "-y", "tmc_pc"]))

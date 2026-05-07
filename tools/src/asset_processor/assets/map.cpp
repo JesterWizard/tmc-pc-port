@@ -15,6 +15,7 @@ std::filesystem::path MapAsset::generateAssetPath() {
 void MapAsset::convertToHumanReadable(const std::vector<char>& baserom) {
     (void)baserom;
     if (isCompressed()) {
+        std::filesystem::create_directories(assetPath.parent_path());
         std::filesystem::path toolsPath = "tools";
         std::vector<std::string> cmd;
         // Decompress.
@@ -27,6 +28,7 @@ void MapAsset::convertToHumanReadable(const std::vector<char>& baserom) {
 
 void MapAsset::buildToBinary() {
     if (isCompressed()) {
+        std::filesystem::create_directories(path.parent_path());
         std::filesystem::path toolsPath = "tools";
         std::vector<std::string> cmd;
         // Compress.
