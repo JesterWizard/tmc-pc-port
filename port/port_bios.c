@@ -53,6 +53,18 @@ u64 DivAndModCombined(s32 num, s32 denom) {
 static void Port_UpdateInput(void) {
     u16 keyinput = 0x03FF;
 
+    {
+        extern bool Port_DebugMenu_IsOpen(void);
+        if (Port_DebugMenu_IsOpen()) {
+            /* While the debug menu is open, hold all GBA buttons released
+             * so the game doesn't observe stray input from key presses we
+             * routed to the menu. */
+            *(vu16*)(gIoMem + REG_OFFSET_KEYINPUT) = keyinput;
+            sFrameNum++;
+            return;
+        }
+    }
+
     for (size_t i = 0; i < sizeof(sInputMap) / sizeof(sInputMap[0]); i++) {
         if (Port_Config_InputPressed(sInputMap[i].input)) {
             keyinput &= ~sInputMap[i].gbaMask;
@@ -88,12 +100,37 @@ static void Port_PumpEvents(void) {
                 /* Capture a bug-report bundle for playtesters: screenshot
                  * + save copy + game-state text. Lands in a timestamped
                  * directory next to the binary. */
-                extern char* Port_BugReport_Capture(void);
-                char* dir = Port_BugReport_Capture();
+                extern char* Port_BugReport_Capture(const char* reason);
+                char* dir = Port_BugReport_Capture("user");
                 if (dir) {
                     free(dir);
                 }
                 continue;
+            }
+            if (e.key.key == SDLK_F8) {
+                extern void Port_DebugMenu_Toggle(void);
+                Port_DebugMenu_Toggle();
+                continue;
+            }
+            if (e.key.key == SDLK_F5) {
+                extern int Port_QuickSave(void);
+                Port_QuickSave();
+                continue;
+            }
+            if (e.key.key == SDLK_F6) {
+                extern int Port_QuickLoad(void);
+                Port_QuickLoad();
+                continue;
+            }
+            /* When the debug menu is open, route key presses to it and
+             * suppress further handling so the game itself doesn't see
+             * the keystroke. */
+            {
+                extern bool Port_DebugMenu_IsOpen(void);
+                extern bool Port_DebugMenu_HandleKey(int sdlKey);
+                if (Port_DebugMenu_IsOpen() && Port_DebugMenu_HandleKey((int)e.key.key)) {
+                    continue;
+                }
             }
             if (e.key.key == SDLK_TAB) {
                 sFastForward = true;
@@ -137,7 +174,8 @@ void VBlankIntrWait(void) {
     port_hdma_vblank_reset();
 
     if (!sFastForward) {
-        while (SDL_GetTicksNS() - lastFrameNs < Port_Config_FrameTimeNs()) {
+        const u64 frameTimeNs = Port_Config_FrameTimeNs();
+        while (frameTimeNs != 0 && SDL_GetTicksNS() - lastFrameNs < frameTimeNs) {
         }
     }
 
@@ -155,8 +193,10 @@ void VBlankIntrWait(void) {
         double fps = (elapsedSec > 0.0) ? (double)sFpsFrameCount / elapsedSec : 0.0;
         char title[96];
 
+/* TMC_PORT_VERSION is set by xmake.lua's add_defines; the fallback below
+ * is just for IDE indexers that don't see the build flags. */
 #ifndef TMC_PORT_VERSION
-#define TMC_PORT_VERSION "0.1.5-experimental"
+#define TMC_PORT_VERSION "0.2.0-experimental"
 #endif
         SDL_snprintf(title, sizeof(title), "The Minish Cap " TMC_PORT_VERSION " - %.1f FPS", fps);
         Port_PPU_SetWindowTitle(title);
