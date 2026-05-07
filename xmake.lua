@@ -146,7 +146,7 @@ target("asset_extractor")
     -- rule writes a raw "0xNN, 0xNN, ..." byte sequence to a header that we
     -- #include inside a C array initializer (see embedded_sounds_json.cpp).
     add_rules("utils.bin2c", {extensions = {".json"}})
-    add_files("assets/sounds.json", {rule = "utils.bin2c", nozeroend = true})
+    add_files("assets/sounds.json", {nozeroend = true})
     after_build(function (target)
         local mirrored_exe = path.join(tools_bin, path.filename(target:targetfile()))
         if mirrored_exe ~= target:targetfile() then
