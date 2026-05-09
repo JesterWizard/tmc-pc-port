@@ -1,6 +1,10 @@
 #include "gba/io_reg.h"
 #include "main.h"
 #include "port_config.h"
+/* Set by xmake (-DMODE1_GBA_WIDTH=N); falls back to GBA-native 240. */
+#ifndef MODE1_GBA_WIDTH
+#define MODE1_GBA_WIDTH 240
+#endif
 #include "port_asset_bootstrap.h"
 #include "port_audio.h"
 #include "port_gba_mem.h"
@@ -242,6 +246,7 @@ int main(int argc, char* argv[]) {
     Port_Config_Load("config.json");
 
     u8 window_scale = Port_Config_WindowScale();
+    bool noAudio = false;
     if (argc > 1) {
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "--window_scale=") == 0 || strncmp(argv[i], "--window_scale=", 15) == 0) {
@@ -253,13 +258,13 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "Invalid window scale '%s'. Must be an integer between 1 and 10.\n", valueStr);
                 }
             }
-            else if (strcmp(argv[i], "--loose-assets") == 0) {
-                Port_LooseAssetsRequested = 1;
+            else if (strcmp(argv[i], "--no-audio") == 0) {
+                noAudio = true;
             }
             else if (strcmp(argv[i], "--help") == 0) {
-                fprintf(stderr, "Usage: %s [--window_scale=<value>] [--loose-assets]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [--window_scale=<value>] [--no-audio]\n", argv[0]);
                 fprintf(stderr, "  --window_scale=<value>: Set the window scale (1-10, default is 3)\n");
-                fprintf(stderr, "  --loose-assets:         Ignore assets/*.pak archives and read loose files instead.\n");
+                fprintf(stderr, "  --no-audio: Skip audio init (workaround for agbplay crash)\n");
                 fprintf(stderr, "  config.json: Set window_scale and bindings defaults\n");
                 return 0;
             }
@@ -276,21 +281,10 @@ int main(int argc, char* argv[]) {
 
     Port_Config_OpenGamepads();
 
-    /* Pre-window ROM presence check: bail out with a message box BEFORE
-     * creating any window so the user gets clear feedback instead of a
-     * black-screen launch. SDL_ShowSimpleMessageBox accepts NULL as
-     * parent, so this is safe pre-window. */
-    const char* romPath = Port_FindBaseRomPath();
-    if (romPath == NULL) {
-        static const char kMsg[] =
-            "Could not find baserom.gba.\n\n"
-            "Place baserom.gba next to tmc_pc and try again.\n"
-            "Supported names: baserom.gba (USA), baserom_eu.gba (EU),\n"
-            "tmc.gba, tmc_eu.gba.";
-        fprintf(stderr, "%s\n", kMsg);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-                                 "Minish Cap PC Port - ROM not found",
-                                 kMsg, NULL);
+    SDL_Window* window = SDL_CreateWindow(
+        "The Minish Cap", MODE1_GBA_WIDTH * window_scale, 160 * window_scale, SDL_WINDOW_RESIZABLE);
+    if (window == NULL) {
+        fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
     }
@@ -360,19 +354,14 @@ int main(int argc, char* argv[]) {
 
     // Initialize PPU renderer
     Port_PPU_Init(window);
-
-    /* Bridge frame: between the progress bar reaching 100% and
-     * AgbMain producing its first GBA frame, audio init and AgbMain
-     * warmup take long enough to leave the window blank. Paint a
-     * single "Starting..." card on the same renderer so the user
-     * sees one continuous experience instead of an extractor screen
-     * followed by a blank window followed by the title screen. */
-    /* Repaint the same "LOADING" card on each transition so the
-     * user sees one continuous splash from window-open to first
-     * GBA frame instead of multiple flickering states. */
-    Port_PaintBootSplash(window, "LOADING");
-    Port_InitAudio();
-    Port_PaintBootSplash(window, "LOADING");
+    fprintf(stderr, "PPU init complete.\n");
+    if (noAudio) {
+        gMain.muteAudio = 1;
+        fprintf(stderr, "Audio disabled by --no-audio flag.\n");
+    } else {
+        Port_InitAudio();
+        fprintf(stderr, "Audio init complete.\n");
+    }
 
     fprintf(stderr, "Port layer initialized. Entering AgbMain...\n");
 

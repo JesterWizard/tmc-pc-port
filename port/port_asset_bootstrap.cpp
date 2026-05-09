@@ -1,15 +1,12 @@
-/* Order matters: std headers first so the GBA-style `min`/`max`
- * macros from include/global.h (pulled in transitively via
- * port_asset_bootstrap.h) don't collide with std::min/std::max
- * inside <algorithm>. */
-#include <algorithm>
+#include "port_asset_bootstrap.h"
+#include "port_asset_pipeline.hpp"
+#include "asset_extractor_runner.h"
+
+#include <SDL3/SDL.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <future>
 #include <mutex>
@@ -147,13 +144,66 @@ std::filesystem::path PreferredAssetRoot() {
     return ec ? std::filesystem::path(".") : cwd;
 }
 
-/* ----------------------------------------------------------------
- *  5x7 bitmap font for the progress bar UI.
- *
- *  Extended from the original A/C/E/G/I/N/R/S/T/X/. set so we can
- *  spell out arbitrary phase names ("loading palettes", "writing
- *  paks", etc.) plus digits for the "3 / 9" counter.
- * ---------------------------------------------------------------- */
+bool EnsureSoundsMetadata(const std::filesystem::path& root, std::string& error) {
+    if (std::filesystem::exists(root / "sounds.json") || std::filesystem::exists(root / "assets" / "sounds.json")) {
+        return true;
+    }
+
+    for (std::filesystem::path probe = root; !probe.empty(); probe = probe.parent_path()) {
+        const std::filesystem::path source = probe / "assets" / "sounds.json";
+        if (std::filesystem::exists(source)) {
+            std::error_code ec;
+            std::filesystem::copy_file(
+                source, root / "sounds.json", std::filesystem::copy_options::overwrite_existing, ec
+            );
+            if (ec) {
+                error = "failed to copy sounds.json: " + ec.message();
+                return false;
+            }
+            return true;
+        }
+
+        const std::filesystem::path parent = probe.parent_path();
+        if (parent == probe) {
+            break;
+        }
+    }
+
+    error = "sounds.json was not found";
+    return false;
+}
+
+bool RunAssetExtractor(const std::filesystem::path& root, std::string& error) {
+    if (!RunEmbeddedAssetExtractor(root, &error)) {
+        return false;
+    }
+
+    if (!RuntimeAssetsReady(root)) {
+        error = "asset extraction finished but assets are still missing";
+        return false;
+    }
+
+    return true;
+}
+
+bool BuildRuntimeAssetsFromEditable(const std::filesystem::path& root, std::string& error) {
+    std::string pipelineError;
+    if (!PortAssetPipeline::BuildRuntimeAssets(root / "assets_src", root / "assets", &pipelineError)) {
+        error = pipelineError.empty() ? "failed to build runtime assets" : pipelineError;
+        return false;
+    }
+    if (!EnsureSoundsMetadata(root, error)) {
+        return false;
+    }
+
+    if (!RuntimeAssetsReady(root)) {
+        error = "runtime assets were built but required manifests are still missing";
+        return false;
+    }
+
+    return true;
+}
+
 using GlyphRows = std::array<unsigned char, 7>;
 
 GlyphRows GlyphFor(char c) {
@@ -420,102 +470,39 @@ extern "C" void Port_EnsureAssetsReadyWithDisplay(SDL_Window* window,
         return;
     }
 
-    /* Step 2: spawn the extractor with a real progress bar. */
-    ProgressSnapshot snap;
-    InstallReporterCallback(snap);
+    if (const auto editableRoot = FindReadyEditableRoot(); editableRoot.has_value()) {
+        const std::filesystem::path installRoot = editableRoot->parent_path();
+        std::string reason;
+        const bool needsBuild =
+            !RuntimeAssetsReady(installRoot) ||
+            PortAssetPipeline::RuntimeAssetsNeedRebuild(*editableRoot, installRoot / "assets", &reason);
+        if (!needsBuild) {
+            std::string ignoredError;
+            EnsureSoundsMetadata(*editableRoot, ignoredError);
+            return;
+        }
 
-#ifdef TMC_OVERLAP_EXTRACT_INIT
-    /* Phase 7: shut all phase gates before extraction starts so the
-     * engine threads block in LoadBinaryFileCached until the
-     * relevant category is on disk. The phase_done callback below
-     * re-opens them per-category as the extractor finishes. */
-    Port_AssetLoader_BeginGated();
+        ok = RunWithExtractingScreen(window,
+                                     [&]() {
+                                         return BuildRuntimeAssetsFromEditable(installRoot, error);
+                                     },
+                                     error);
+    } else {
+#ifdef TMC_ANDROID_PORT
+        error = "Android runtime assets are missing. Re-select the ROM so the in-app extractor can rebuild them.";
+        ok = false;
+#else
+        const std::filesystem::path root = PreferredAssetRoot();
+        ok = RunWithExtractingScreen(window,
+                                     [&]() {
+                                         return RunAssetExtractor(root, error);
+                                     },
+                                     error);
 #endif
-
-    AssetExtractorApi::Options opt;
-    opt.rom_path = rom;
-    if (rom_data != nullptr && rom_size > 0) {
-        /* Phase 6: reuse the engine's already-loaded ROM buffer so
-         * we don't pay for a second 16 MB read off disk. The
-         * extractor copies bytes into its own vector internally. */
-        opt.rom_buffer = std::span<const uint8_t>(rom_data, rom_size);
-    }
-    opt.editable_root = root / "assets_src";
-    opt.runtime_root = root / "assets";
-    opt.runtime_only = true;     // engine doesn't need the editable JSON tree
-    opt.pack_runtime = packMode;
-    opt.force = false;
-    opt.verbose = false;
-
-
-    std::string err;
-    const bool ok = RunWithProgressScreen(window, snap, [&] {
-        return AssetExtractorApi::ExtractAssets(opt, &err);
-    });
-
-    ClearReporterCallback();
-
-#ifdef TMC_OVERLAP_EXTRACT_INIT
-    /* Failsafe: if extraction errored partway through, open every
-     * gate so engine threads waiting on LoadBinaryFileCached unblock
-     * (and propagate the failure via the message box below) instead
-     * of deadlocking. Idempotent if everything already succeeded. */
-    Port_AssetLoader_OpenAllGates();
-#endif
-
-    if (ok) {
-        MountPaksForRoot(root);
-        /* Port_LoadRom (which already ran at this point) probed the
-         * asset loader before assets/ existed. Re-trigger the scan
-         * now that gfx_groups.json / palette_groups.json / area JSONs
-         * are on disk so the engine sees them on the next lookup. */
-        Port_AssetLoader_Reload();
-        Port_LoadTextsFromAssets();
-        Port_LoadSpritePtrsFromAssets();
-        Port_LoadAreaTablesFromAssets();
-        return;
     }
 
-    const std::string message = err.empty() ? std::string("Asset extraction failed.") : err;
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Asset extraction failed", message.c_str(),
-                             window);
-}
-
-extern "C" void Port_PaintBootSplash(SDL_Window* window, const char* message) {
-    if (!window) return;
-    /* Reuse whichever renderer is already attached to the window
-     * (one we created earlier in this function on the first call,
-     * the bootstrap progress UI's, or PPU's). If none exists yet —
-     * which is the common case on warm launch when this is the
-     * first paint of the run — create one here so the window stops
-     * being a blank black rectangle for the ~1.4 s it would
-     * otherwise take to reach Port_PPU_Init. PPU later adopts this
-     * same renderer via SDL_GetRenderer(window). */
-    SDL_Renderer* renderer = SDL_GetRenderer(window);
-    if (!renderer) {
-        /* Fallback: only triggers if main forgot to use
-         * SDL_CreateWindowAndRenderer. Recreating the renderer
-         * here on Linux/X11 forces SDL to re-add SDL_WINDOW_OPENGL
-         * to the window, which destroys and recreates the X11
-         * window — visible to the user as "first window closes,
-         * second opens." Keep main's atomic-create path. */
-        renderer = SDL_CreateRenderer(window, nullptr);
+    if (!ok) {
+        const std::string message = error.empty() ? "Asset extraction failed." : error;
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Asset extraction failed", message.c_str(), window);
     }
-    if (!renderer) return;
-
-    int width = 0;
-    int height = 0;
-    SDL_GetWindowSize(window, &width, &height);
-    const float fw = static_cast<float>(width);
-    const float fh = static_cast<float>(height);
-    const float scale = std::max(2.0f, std::round(fw / 240.0f));
-
-    SDL_SetRenderDrawColor(renderer, 12, 16, 22, 255);
-    SDL_RenderClear(renderer);
-
-    const std::string text = message ? std::string(message) : std::string("STARTING");
-    const float w = MeasureText(text, scale);
-    DrawText(renderer, text, (fw - w) * 0.5f, (fh - 7.0f * scale) * 0.5f, scale);
-
-    SDL_RenderPresent(renderer);
 }

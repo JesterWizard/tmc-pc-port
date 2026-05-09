@@ -1,28 +1,8 @@
 #include "util.h"
-#include <algorithm>
+#include "simple_format.h"
 #include <iostream>
-#include <fmt/format.h>
-
-#ifdef _WIN32
-#include <process.h>
-#endif
-
-#ifndef _WIN32
-static std::string quote_cmd_argument(const std::string& arg) {
-    std::string normalized = arg;
-    std::replace(normalized.begin(), normalized.end(), '\\', '/');
-
-    std::string escaped;
-    for (char c : normalized) {
-        if (c == '"') {
-            escaped += '\\';
-        }
-        escaped += c;
-    }
-
-    return std::string("\"") + escaped + "\"";
-}
-#endif
+#include <iomanip>
+#include <sstream>
 
 void check_call(const std::vector<std::string>& cmd) {
 #ifdef _WIN32
@@ -63,7 +43,13 @@ void check_call(const std::vector<std::string>& cmd) {
 
 std::string opt_param(const std::string& format, int defaultVal, int value) {
     if (value != defaultVal) {
-        return fmt::format(format, value);
+        return assetfmt::Format(format, value);
     }
     return "";
+}
+
+std::string hex_u32(uint32_t value) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::nouppercase << value;
+    return out.str();
 }

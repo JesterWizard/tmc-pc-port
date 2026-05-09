@@ -1,19 +1,18 @@
-#include "assets_extractor_api.hpp"
-#include "port_asset_log.hpp"
-#include "global.h"
+#include "asset_extractor_runner.h"
 
-#include <fmt/format.h>
-
+#include <cstdint>
 #include <filesystem>
-#include <string>
-#include <string_view>
+#include <iostream>
 
-/* Standalone binary owns these globals; in tmc_pc they're defined in
- * port_rom.c and Port_LoadRom populates them BEFORE the API runs.
- * port_gba_mem.h declares them with C++ linkage when compiled from a
- * .cpp TU, so match that here rather than re-introducing extern "C". */
-u8* gRomData = nullptr;
-u32 gRomSize = 0;
+#include <cstddef>
+#include <fstream>
+
+#include <cstddef>
+#include <fstream>
+
+extern "C" {
+std::uint8_t* gRomData = nullptr;
+std::uint32_t gRomSize = 0;
 
 int main(int argc, char* argv[])
 {
@@ -50,31 +49,19 @@ int main(int argc, char* argv[])
         executable_dir = std::filesystem::current_path();
     }
 
-    AssetExtractorApi::Options opt;
-    opt.rom_path = executable_dir / "baserom.gba";
-    opt.editable_root = executable_dir / "assets_src";
-    opt.runtime_root = executable_dir / "assets";
-    opt.runtime_only = runtime_only;
-    opt.pack_runtime = pack_runtime;
-    opt.force = force;
-    opt.verbose = verbose;
-
-    std::string err;
-    if (!AssetExtractorApi::ExtractAssets(opt, &err)) {
-        PortAssetLog::Reporter::Instance().Error(err);
+    std::string error;
+    if (!RunEmbeddedAssetExtractor(executable_dir, &error)) {
+        std::cerr << "Failed to extract assets: " << error << std::endl;
         return 1;
     }
 
-    /* Mirror the extractor's loaded ROM bytes into the gRomData /
-     * gRomSize globals so any standalone-linked TU that still consults
-     * them (currently none, but kept for parity with the previous
-     * behavior where the API itself did this) sees the loaded bytes.
-     * The cast drops `const` because the legacy globals predate the
-     * const audit; the standalone binary never writes through them.
-     * The API deliberately no longer touches these so it doesn't
-     * orphan tmc_pc's Port_LoadRom-populated buffer. */
-    const std::span<const uint8_t> rom = AssetExtractorApi::LoadedRomBytes();
-    gRomData = const_cast<u8*>(rom.data());
-    gRomSize = static_cast<u32>(rom.size());
+    /* Always emit sounds.json next to the binary (= where tmc_pc launches
+     * from). Same directory as assets_src/ and assets/. */
+    write_sounds_json(executable_dir / "sounds.json");
+
+    /* Always emit sounds.json next to the binary (= where tmc_pc launches
+     * from). Same directory as assets_src/ and assets/. */
+    write_sounds_json(executable_dir / "sounds.json");
+
     return 0;
 }
